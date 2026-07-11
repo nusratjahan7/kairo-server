@@ -29,6 +29,14 @@ async function run() {
         const db = client.db(dbName);
         const eventCollection = db.collection("events");
 
+        // EVENTS 
+
+        app.get('/events', async (req, res): Promise<any> => {
+            const cursor = eventCollection.find();
+            const result = await cursor.toArray();
+            res.send(result);
+        })
+
         app.post("/events", async (req, res): Promise<any> => {
             try {
                 const newEvent = {
