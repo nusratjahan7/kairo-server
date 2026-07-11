@@ -27,8 +27,25 @@ async function run() {
 
         const dbName = process.env.AUTH_DB_NAME;
         const db = client.db(dbName);
+        const eventCollection = db.collection("events");
 
+        app.post("/events", async (req, res): Promise<any> => {
+            try {
+                const newEvent = {
+                    ...req.body,
+                    dateTime: new Date(req.body.dateTime),
+                    price: Number(req.body.price),
+                    capacity: Number(req.body.capacity),
+                    createdAt: new Date()
+                };
 
+                const result = await eventCollection.insertOne(newEvent);
+
+                return res.status(201).json({ success: true, result });
+            } catch (error) {
+                return res.status(500).json({ success: false, error });
+            }
+        });
 
         // Ping MongoDB
         await client.db("admin").command({ ping: 1 });
