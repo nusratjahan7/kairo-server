@@ -83,6 +83,60 @@ async function run() {
             }
         });
 
+        // UPDATE EVENT
+        app.put("/events/:id", async (req, res): Promise<any> => {
+            try {
+                const id = req.params.id;
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).json({ success: false, message: "Invalid Event ID format" });
+                }
+
+                const updatedEvent = {
+                    ...req.body,
+                    dateTime: req.body.dateTime ? new Date(req.body.dateTime) : undefined,
+                    price: req.body.price !== undefined ? Number(req.body.price) : undefined,
+                    capacity: req.body.capacity !== undefined ? Number(req.body.capacity) : undefined,
+                    updatedAt: new Date()
+                };
+
+
+                Object.keys(updatedEvent).forEach(key => (updatedEvent as any)[key] === undefined && delete (updatedEvent as any)[key]);
+
+                const result = await eventCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: updatedEvent }
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).json({ success: false, message: "Event not found" });
+                }
+
+                return res.status(200).json({ success: true, message: "Event updated successfully" });
+            } catch (error: any) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        // DELETE EVENT
+        app.delete("/events/:id", async (req, res): Promise<any> => {
+            try {
+                const id = req.params.id;
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).json({ success: false, message: "Invalid Event ID format" });
+                }
+
+                const result = await eventCollection.deleteOne({ _id: new ObjectId(id) });
+
+                if (result.deletedCount === 0) {
+                    return res.status(404).json({ success: false, message: "Event not found" });
+                }
+
+                return res.status(200).json({ success: true, message: "Event deleted successfully" });
+            } catch (error: any) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         // =========================================================
         //  STRIPE CHECKOUT SESSION ROUTE 
         // =========================================================
