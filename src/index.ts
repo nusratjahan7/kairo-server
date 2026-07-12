@@ -223,13 +223,11 @@ async function run() {
 
         app.get('/api/admin/dashboard', async (req, res): Promise<any> => {
             try {
-
                 const totalUsersCount = await userCollection.countDocuments();
 
                 const totalBookingsCount = await bookingCollection.countDocuments({
                     status: { $ne: "cancelled" }
                 });
-
 
                 const revenueAggregation = await bookingCollection.aggregate([
                     { $match: { status: { $ne: "cancelled" } } },
@@ -239,29 +237,26 @@ async function run() {
                 const totalRevenueAmount = revenueAggregation[0]?.total || 0;
 
 
-                const monthlyChartData = await bookingCollection.aggregate([
+                const dailyChartData = await bookingCollection.aggregate([
                     { $match: { status: { $ne: "cancelled" } } },
                     {
                         $group: {
 
-                            _id: { $dateToString: { format: "%b", date: "$bookedAt" } },
+                            _id: { $dateToString: { format: "%Y-%m-%d", date: "$bookedAt" } },
                             revenue: { $sum: "$totalPrice" },
-                            bookings: { $sum: "$ticketsCount" },
-
-                            minDate: { $min: "$bookedAt" }
+                            bookings: { $sum: "$ticketsCount" }
                         }
                     },
-                    { $sort: { minDate: 1 } },
+                    { $sort: { _id: 1 } },
                     {
                         $project: {
                             _id: 0,
-                            month: "$_id",
+                            date: "$_id",
                             revenue: 1,
                             bookings: 1
                         }
                     }
                 ]).toArray();
-
 
                 return res.status(200).json({
                     totalUsers: {
@@ -269,15 +264,17 @@ async function run() {
                         change: "+12% this month"
                     },
                     totalRevenue: {
-                        value: `৳${totalRevenueAmount.toLocaleString()}`,
+                        // CHANGED: Replaced Taka (৳) symbol with Dollar ($) symbol
+                        value: `$${totalRevenueAmount.toLocaleString()}`,
                         change: "+24% this month"
                     },
                     totalBookings: {
                         value: totalBookingsCount.toLocaleString(),
                         change: "+18% this month"
                     },
-                    chartData: monthlyChartData.length > 0 ? monthlyChartData : [
-                        { month: "No Data", revenue: 0, bookings: 0 }
+                    // CHANGED: Fallback key adjusted to 'date'
+                    chartData: dailyChartData.length > 0 ? dailyChartData : [
+                        { date: "No Data", revenue: 0, bookings: 0 }
                     ]
                 });
 
