@@ -221,6 +221,75 @@ async function run() {
             }
         });
 
+        app.get('/api/admin/dashboard', async (req, res): Promise<any> => {
+            try {
+
+                const totalUsersCount = await userCollection.countDocuments();
+
+                const totalBookingsCount = await bookingCollection.countDocuments({
+                    status: { $ne: "cancelled" }
+                });
+
+
+                const revenueAggregation = await bookingCollection.aggregate([
+                    { $match: { status: { $ne: "cancelled" } } },
+                    { $group: { _id: null, total: { $sum: "$totalPrice" } } }
+                ]).toArray();
+
+                const totalRevenueAmount = revenueAggregation[0]?.total || 0;
+
+
+                const monthlyChartData = await bookingCollection.aggregate([
+                    { $match: { status: { $ne: "cancelled" } } },
+                    {
+                        $group: {
+
+                            _id: { $dateToString: { format: "%b", date: "$bookedAt" } },
+                            revenue: { $sum: "$totalPrice" },
+                            bookings: { $sum: "$ticketsCount" },
+
+                            minDate: { $min: "$bookedAt" }
+                        }
+                    },
+                    { $sort: { minDate: 1 } },
+                    {
+                        $project: {
+                            _id: 0,
+                            month: "$_id",
+                            revenue: 1,
+                            bookings: 1
+                        }
+                    }
+                ]).toArray();
+
+
+                return res.status(200).json({
+                    totalUsers: {
+                        value: totalUsersCount.toLocaleString(),
+                        change: "+12% this month"
+                    },
+                    totalRevenue: {
+                        value: `৳${totalRevenueAmount.toLocaleString()}`,
+                        change: "+24% this month"
+                    },
+                    totalBookings: {
+                        value: totalBookingsCount.toLocaleString(),
+                        change: "+18% this month"
+                    },
+                    chartData: monthlyChartData.length > 0 ? monthlyChartData : [
+                        { month: "No Data", revenue: 0, bookings: 0 }
+                    ]
+                });
+
+            } catch (error: any) {
+                console.error("Error generating admin dashboard analytics:", error);
+                return res.status(500).json({
+                    success: false,
+                    message: "Server Error generating dashboard analytics data"
+                });
+            }
+        });
+
         app.put('/api/admin/bookings/:id', async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
@@ -386,7 +455,7 @@ async function run() {
         await client.db("admin").command({ ping: 1 });
         console.log("✅ Connected to MongoDB");
 
-        // 🆕 এখন routes সব registered হওয়ার পরেই সার্ভার listen শুরু করে
+
         app.listen(PORT, () => {
             console.log(`🚀 Server running on port ${PORT}`);
         });
