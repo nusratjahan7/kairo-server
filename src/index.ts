@@ -1,7 +1,8 @@
 import express from "express";
+import type { Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
 import cors from "cors";
-import { MongoClient, ObjectId, ServerApiVersion } from "mongodb";
+import { MongoClient, ObjectId, ServerApiVersion, Collection } from "mongodb";
 import Stripe from "stripe";
 
 dotenv.config();
@@ -24,10 +25,33 @@ const client = new MongoClient(uri, {
     },
 });
 
-
 app.get("/", (req, res) => {
     res.send("Server is Serving...");
 });
+
+// ========== TYPES ==========
+interface AuthUser {
+    _id: ObjectId;
+    id?: string;
+    email?: string;
+    role?: "user" | "admin";
+    [key: string]: any;
+}
+
+interface SessionDoc {
+    _id?: ObjectId;
+    token: string;
+    userId: string | ObjectId;
+    [key: string]: any;
+}
+
+declare global {
+    namespace Express {
+        interface Request {
+            user?: AuthUser;
+        }
+    }
+}
 
 async function run() {
     try {
@@ -38,9 +62,68 @@ async function run() {
         const userCollection = db.collection("user");
         const eventCollection = db.collection("events");
         const bookingCollection = db.collection("bookings");
+        const sessionCollection: Collection<SessionDoc> = db.collection("session");
+
+        // ========== VERIFY TOKEN ==========
+        const verifyToken = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+            try {
+                const authHeader = req.headers?.authorization;
+                if (!authHeader) {
+                    return res.status(401).json({ message: "unauthorized access" });
+                }
+
+                const token = authHeader.split(" ")[1];
+                if (!token) {
+                    return res.status(401).json({ message: "unauthorized access" });
+                }
+
+                const session = await sessionCollection.findOne({ token });
+                if (!session) {
+                    return res.status(401).json({ message: "unauthorized access" });
+                }
+                const userId =
+                    session.userId instanceof ObjectId
+                        ? session.userId
+                        : ObjectId.isValid(session.userId)
+                            ? new ObjectId(session.userId)
+                            : null;
+
+                if (!userId) {
+                    return res.status(401).json({ message: "unauthorized access" });
+                }
+
+                const user = await userCollection.findOne({ _id: userId });
+                if (!user) {
+                    return res.status(401).json({ message: "unauthorized access" });
+                }
+
+
+                req.user = { ...user, id: user._id.toString() } as AuthUser;
+                next();
+            } catch (error: any) {
+                console.error("Token verification failed:", error);
+                return res.status(500).json({ message: "Server error during authentication" });
+            }
+        };
+
+        // ========== VERIFY USER ==========
+        const verifyUser = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+            if (req.user?.role !== "user") {
+                return res.status(403).json({ message: "forbidden access" });
+            }
+            next();
+        };
+
+        // ========== VERIFY ADMIN ==========
+        const verifyAdmin = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+            if (req.user?.role !== "admin") {
+                return res.status(403).json({ message: "forbidden access" });
+            }
+            next();
+        };
 
         // ========== USER BOOKING API ==========
-        app.get('/api/bookings/mine', async (req, res): Promise<any> => {
+        app.get('/api/bookings/mine', verifyToken, verifyUser, async (req, res): Promise<any> => {
             try {
                 const email = req.query.email as string;
                 if (!email) {
@@ -65,7 +148,7 @@ async function run() {
         });
 
         // ========== ADMIN USERS API ==========
-        app.get('/api/admin/users', async (req, res): Promise<any> => {
+        app.get('/api/admin/users', verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const cursor = userCollection.find().sort({ createdAt: -1 });
                 const result = await cursor.toArray();
@@ -87,10 +170,10 @@ async function run() {
             }
         });
 
-        app.put('/api/admin/users/:id/role', async (req, res): Promise<any> => {
+        app.put('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
-                if (!ObjectId.isValid(id)) {
+                if (typeof id !== "string" || !ObjectId.isValid(id)) {
                     return res.status(400).json({ success: false, message: "Invalid User ID format" });
                 }
 
@@ -125,10 +208,10 @@ async function run() {
             res.send(result);
         });
 
-        app.get('/events/:id', async (req, res): Promise<any> => {
+        app.get('/events/:id', verifyToken, async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
-                if (!id || !ObjectId.isValid(id)) {
+                if (typeof id !== "string" || !ObjectId.isValid(id)) {
                     return res.status(400).json({ success: false, message: "Invalid Event ID format" });
                 }
                 const query = { _id: new ObjectId(id) };
@@ -143,7 +226,7 @@ async function run() {
             }
         });
 
-        app.post("/events", async (req, res): Promise<any> => {
+        app.post("/events", verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const newEvent = {
                     ...req.body,
@@ -159,14 +242,15 @@ async function run() {
             }
         });
 
-        app.put("/events/:id", async (req, res): Promise<any> => {
+        app.put("/events/:id", verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
-                if (!ObjectId.isValid(id)) {
+                if (typeof id !== "string" || !ObjectId.isValid(id)) {
                     return res.status(400).json({ success: false, message: "Invalid Event ID format" });
                 }
+                const { _id, id: bodyId, ...rest } = req.body;
                 const updatedEvent = {
-                    ...req.body,
+                    ...rest,
                     dateTime: req.body.dateTime ? new Date(req.body.dateTime) : undefined,
                     price: req.body.price !== undefined ? Number(req.body.price) : undefined,
                     capacity: req.body.capacity !== undefined ? Number(req.body.capacity) : undefined,
@@ -186,10 +270,10 @@ async function run() {
             }
         });
 
-        app.delete("/events/:id", async (req, res): Promise<any> => {
+        app.delete("/events/:id", verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
-                if (!ObjectId.isValid(id)) {
+                if (typeof id !== "string" || !ObjectId.isValid(id)) {
                     return res.status(400).json({ success: false, message: "Invalid Event ID format" });
                 }
                 const result = await eventCollection.deleteOne({ _id: new ObjectId(id) });
@@ -203,11 +287,10 @@ async function run() {
         });
 
         // ========== ADMIN BOOKINGS API ==========
-        app.get('/api/admin/bookings', async (req, res): Promise<any> => {
+        app.get('/api/admin/bookings', verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const cursor = bookingCollection.find().sort({ bookedAt: -1 });
                 const result = await cursor.toArray();
-
 
                 const mapped = result.map((b) => ({
                     ...b,
@@ -221,7 +304,7 @@ async function run() {
             }
         });
 
-        app.get('/api/admin/dashboard', async (req, res): Promise<any> => {
+        app.get('/api/admin/dashboard', verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const totalUsersCount = await userCollection.countDocuments();
 
@@ -236,12 +319,10 @@ async function run() {
 
                 const totalRevenueAmount = revenueAggregation[0]?.total || 0;
 
-
                 const dailyChartData = await bookingCollection.aggregate([
                     { $match: { status: { $ne: "cancelled" } } },
                     {
                         $group: {
-
                             _id: { $dateToString: { format: "%Y-%m-%d", date: "$bookedAt" } },
                             revenue: { $sum: "$totalPrice" },
                             bookings: { $sum: "$ticketsCount" }
@@ -264,7 +345,6 @@ async function run() {
                         change: "+12% this month"
                     },
                     totalRevenue: {
-                        // CHANGED: Replaced Taka (৳) symbol with Dollar ($) symbol
                         value: `$${totalRevenueAmount.toLocaleString()}`,
                         change: "+24% this month"
                     },
@@ -272,7 +352,6 @@ async function run() {
                         value: totalBookingsCount.toLocaleString(),
                         change: "+18% this month"
                     },
-                    // CHANGED: Fallback key adjusted to 'date'
                     chartData: dailyChartData.length > 0 ? dailyChartData : [
                         { date: "No Data", revenue: 0, bookings: 0 }
                     ]
@@ -287,10 +366,10 @@ async function run() {
             }
         });
 
-        app.put('/api/admin/bookings/:id', async (req, res): Promise<any> => {
+        app.put('/api/admin/bookings/:id', verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
-                if (!ObjectId.isValid(id)) {
+                if (typeof id !== "string" || !ObjectId.isValid(id)) {
                     return res.status(400).json({ success: false, message: "Invalid Booking ID format" });
                 }
                 const { status } = req.body;
@@ -311,10 +390,10 @@ async function run() {
             }
         });
 
-        app.delete('/api/admin/bookings/:id', async (req, res): Promise<any> => {
+        app.delete('/api/admin/bookings/:id', verifyToken, verifyAdmin, async (req, res): Promise<any> => {
             try {
                 const id = req.params.id;
-                if (!ObjectId.isValid(id)) {
+                if (typeof id !== "string" || !ObjectId.isValid(id)) {
                     return res.status(400).json({ success: false, message: "Invalid Booking ID format" });
                 }
                 const result = await bookingCollection.deleteOne({ _id: new ObjectId(id) });
@@ -328,9 +407,8 @@ async function run() {
             }
         });
 
-        app.post('/api/bookings', async (req, res): Promise<any> => {
+        app.post('/api/bookings', verifyToken, async (req, res): Promise<any> => {
             try {
-
                 const { id, eventId, customerEmail, ticketsCount, totalPrice, ...rest } = req.body;
 
                 if (!eventId || !customerEmail) {
@@ -340,9 +418,11 @@ async function run() {
                     });
                 }
 
+
+                const userId = req.user?.id || null;
+
                 const incomingTickets = Number(ticketsCount || 1);
                 const incomingPrice = Number(totalPrice);
-
 
                 const existingBooking = await bookingCollection.findOne({
                     eventId,
@@ -351,7 +431,6 @@ async function run() {
                 });
 
                 if (existingBooking) {
-                    // পুরনো booking-এই ticketsCount আর totalPrice যোগ করা হচ্ছে
                     const updatedTicketsCount =
                         (existingBooking.ticketsCount || 0) + incomingTickets;
                     const updatedTotalPrice =
@@ -364,6 +443,7 @@ async function run() {
                                 ticketsCount: updatedTicketsCount,
                                 totalPrice: updatedTotalPrice,
                                 status: "confirmed",
+                                userId: existingBooking.userId || userId,
                                 updatedAt: new Date(),
                             },
                         },
@@ -377,11 +457,11 @@ async function run() {
                     });
                 }
 
-                // এই ইউজারের এই ইভেন্টে এটাই প্রথম বুকিং — নতুন document তৈরি
                 const newBooking = {
                     ...rest,
                     eventId,
                     customerEmail,
+                    userId,
                     ticketsCount: incomingTickets,
                     totalPrice: incomingPrice,
                     status: rest.status || "confirmed",
@@ -451,7 +531,6 @@ async function run() {
         // Ping MongoDB
         await client.db("admin").command({ ping: 1 });
         console.log("✅ Connected to MongoDB");
-
 
         app.listen(PORT, () => {
             console.log(`🚀 Server running on port ${PORT}`);
