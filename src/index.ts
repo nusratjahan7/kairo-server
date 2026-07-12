@@ -39,6 +39,31 @@ async function run() {
         const eventCollection = db.collection("events");
         const bookingCollection = db.collection("bookings");
 
+        // ========== USER BOOKING API ==========
+        app.get('/api/bookings/mine', async (req, res): Promise<any> => {
+            try {
+                const email = req.query.email as string;
+                if (!email) {
+                    return res.status(400).json({ success: false, message: "email query param is required" });
+                }
+
+                const cursor = bookingCollection
+                    .find({ customerEmail: email })
+                    .sort({ bookedAt: -1 });
+                const result = await cursor.toArray();
+
+                const mapped = result.map((b) => ({
+                    ...b,
+                    id: b._id.toString(),
+                }));
+
+                return res.status(200).json(mapped);
+            } catch (error: any) {
+                console.error("Error fetching user bookings:", error);
+                return res.status(500).json({ success: false, message: "Server Error fetching bookings" });
+            }
+        });
+
         // ========== ADMIN USERS API ==========
         app.get('/api/admin/users', async (req, res): Promise<any> => {
             try {
