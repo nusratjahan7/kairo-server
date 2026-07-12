@@ -24,7 +24,7 @@ const client = new MongoClient(uri, {
     },
 });
 
-// 🆕 root route এখন সবার আগে, MongoDB connect হোক বা না হোক এটা কাজ করবে (health check হিসেবে)
+
 app.get("/", (req, res) => {
     res.send("Server is Serving...");
 });
@@ -35,8 +35,63 @@ async function run() {
 
         const dbName = process.env.AUTH_DB_NAME;
         const db = client.db(dbName);
+        const userCollection = db.collection("user");
         const eventCollection = db.collection("events");
         const bookingCollection = db.collection("bookings");
+
+        // ========== ADMIN USERS API ==========
+        app.get('/api/admin/users', async (req, res): Promise<any> => {
+            try {
+                const cursor = userCollection.find().sort({ createdAt: -1 });
+                const result = await cursor.toArray();
+
+                const mapped = result.map((u) => ({
+                    id: u._id.toString(),
+                    name: u.name || "Unnamed User",
+                    email: u.email,
+                    role: u.role || "user",
+                    emailVerified: u.emailVerified || false,
+                    image: u.image || null,
+                    createdAt: u.createdAt,
+                }));
+
+                return res.status(200).json(mapped);
+            } catch (error: any) {
+                console.error("Error fetching users:", error);
+                return res.status(500).json({ success: false, message: "Server Error fetching users" });
+            }
+        });
+
+        app.put('/api/admin/users/:id/role', async (req, res): Promise<any> => {
+            try {
+                const id = req.params.id;
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).json({ success: false, message: "Invalid User ID format" });
+                }
+
+                const { role } = req.body;
+                if (!role || !["user", "admin"].includes(role)) {
+                    return res.status(400).json({ success: false, message: "Invalid role value" });
+                }
+
+                const result = await userCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { role, updatedAt: new Date() } }
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).json({ success: false, message: "User not found" });
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    message: `User role updated to ${role} successfully`,
+                });
+            } catch (error: any) {
+                console.error("Error updating user role:", error);
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
 
         // ========== EVENTS API ==========
         app.get('/events', async (req, res): Promise<any> => {
